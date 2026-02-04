@@ -14,9 +14,14 @@ from ..config import config
 
 def get_local_time_info() -> str:
     """获取本地时间信息，用于注入到搜索查询中"""
+    import os
     try:
-        # 尝试获取系统本地时区
-        local_tz = datetime.now().astimezone().tzinfo
+        # 优先使用 TZ 环境变量指定的时区
+        tz_name = os.environ.get("TZ", "")
+        if tz_name:
+            local_tz = ZoneInfo(tz_name)
+        else:
+            local_tz = datetime.now().astimezone().tzinfo
         local_now = datetime.now(local_tz)
     except Exception:
         # 降级使用 UTC
