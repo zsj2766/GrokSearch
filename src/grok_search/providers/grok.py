@@ -162,6 +162,8 @@ class GrokSearchProvider(BaseSearchProvider):
             "stream": True,
         }
 
+        if time_context:
+            await log_info(ctx, f"time_context: {time_context.strip()}", config.debug_enabled)
         await log_info(ctx, f"platform_prompt: { query + platform_prompt + return_prompt}", config.debug_enabled)
 
         return await self._execute_stream_with_retry(headers, payload, ctx)
