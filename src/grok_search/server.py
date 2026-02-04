@@ -23,7 +23,37 @@ except ImportError:
 
 import asyncio
 
-mcp = FastMCP("grok-search")
+MCP_INSTRUCTIONS = """
+# Grok Search MCP Usage Guide
+
+## Tool Matrix
+| Tool | Parameters | Output | Use Case |
+|------|------------|--------|----------|
+| `web_search` | `query`(required), `platform`/`min_results`/`max_results`(optional) | `[{title,url,content}]` | Multi-source aggregation/Fact checking/Latest news |
+| `web_fetch` | `url`(required) | Structured Markdown | Full content retrieval/Deep analysis |
+| `get_config_info` | None | `{api_url,status,test}` | Connection diagnostics |
+| `switch_model` | `model`(required) | `{status,previous_model,current_model}` | Switch Grok model |
+| `toggle_builtin_tools` | `action`(optional: on/off/status) | `{blocked,deny_list,file}` | Disable/Enable built-in tools |
+
+## Execution Strategy
+- **Query Construction**: Use `web_search` for breadth, `web_fetch` for depth, set `platform` parameter for specific platforms
+- **Search Execution**: Prioritize summaries → Supplement key URLs with full content → Adjust query and retry if results insufficient (NEVER give up)
+- **Result Integration**: Cross-validate + **MANDATORY source attribution** `[Title](URL)` + Annotate time-sensitive info with dates
+
+## Error Recovery
+- Connection failed → Check with `get_config_info`
+- No results → Relax query conditions
+- Timeout → Search alternative sources
+
+## Core Constraints
+✅ Output MUST include source citations + MUST retry on failure + MUST verify critical info
+❌ NO output without sources + NO single-attempt abandonment + NO unverified assumptions
+"""
+
+mcp = FastMCP(
+    "grok-search",
+    instructions=MCP_INSTRUCTIONS
+)
 
 @mcp.tool(
     name="web_search",
@@ -358,6 +388,23 @@ def main():
     import signal
     import os
     import threading
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Grok Search MCP Server")
+    parser.add_argument("--transport", choices=["stdio", "sse", "http"],
+                        default=os.environ.get("GROK_TRANSPORT", "stdio"),
+                        help="Transport mode (default: stdio)")
+    parser.add_argument("--host", default=os.environ.get("GROK_HOST", "0.0.0.0"),
+                        help="Host for HTTP/SSE (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("GROK_PORT", "8000")),
+                        help="Port for HTTP/SSE (default: 8000)")
+    parser.add_argument("--model", default=os.environ.get("GROK_MODEL"),
+                        help="Override default model (e.g., grok-4.1-thinking)")
+    args = parser.parse_args()
+
+    # 启动时指定模型则覆盖配置
+    if args.model:
+        config.set_model(args.model)
 
     # 信号处理（仅主线程）
     if threading.current_thread() is threading.main_thread():
@@ -367,14 +414,13 @@ def main():
         if sys.platform != 'win32':
             signal.signal(signal.SIGTERM, handle_shutdown)
 
-    # Windows 父进程监控
-    if sys.platform == 'win32':
+    # Windows 父进程监控（仅 stdio 模式需要）
+    if sys.platform == 'win32' and args.transport == "stdio":
         import time
         import ctypes
         parent_pid = os.getppid()
 
         def is_parent_alive(pid):
-            """Windows 下检查进程是否存活"""
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             STILL_ACTIVE = 259
             kernel32 = ctypes.windll.kernel32
@@ -395,11 +441,16 @@ def main():
         threading.Thread(target=monitor_parent, daemon=True).start()
 
     try:
-        mcp.run(transport="stdio")
+        if args.transport == "stdio":
+            mcp.run(transport="stdio")
+        else:
+            print(f"Starting {args.transport.upper()} server on {args.host}:{args.port}")
+            mcp.run(transport=args.transport, host=args.host, port=args.port)
     except KeyboardInterrupt:
         pass
     finally:
-        os._exit(0)
+        if args.transport == "stdio":
+            os._exit(0)
 
 
 if __name__ == "__main__":
